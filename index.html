@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Future Vision AI</title>
+  <meta charset="UTF-8" />
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/websim/dist/websim.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+        font-family: 'Inter', sans-serif;
+        background-color: #111827; /* bg-gray-900 */
+        color: #f3f4f6; /* text-gray-100 */
+    }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+
+    .loader {
+      width: 48px;
+      height: 48px;
+      border: 5px solid #FFF;
+      border-bottom-color: transparent;
+      border-radius: 50%;
+      display: inline-block;
+      box-sizing: border-box;
+      animation: rotation 1s linear infinite;
+    }
+
+    @keyframes rotation {
+      0% {
+        transform: rotate(0deg);
+      }
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+    
+    .slider-thumb::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 20px;
+        height: 20px;
+        background: #3b82f6; /* bg-blue-500 */
+        cursor: pointer;
+        border-radius: 50%;
+        margin-top: -6px;
+    }
+
+    .slider-thumb::-moz-range-thumb {
+        width: 20px;
+        height: 20px;
+        background: #3b82f6; /* bg-blue-500 */
+        cursor: pointer;
+        border-radius: 50%;
+    }
+
+    .animate-fade-in {
+        animation: fadeIn 0.5s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useSyncExternalStore, useMemo, useCallback } = React;
+
+    const room = new WebsimSocket();
+
+    function App() {
+      const [view, setView] = useState({ type: 'gallery' });
+
+      const handleSelectImage = (image) => {
+        setView({ type: 'aging', image });
+      };
+
+      const handleBackToGallery = () => {
+        setView({ type: 'gallery' });
+      };
+      
+      return (
+        <div className="container mx-auto p-4 md:p-8">
+            <header className="text-center mb-8">
+                <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">Future Vision AI</h1>
+                <p className="text-gray-400 mt-2">Generate an image, then see how time transforms it.</p>
+            </header>
+            
+            <ImageGenerator />
+            
+            <main>
+                {view.type === 'gallery' && <Gallery onSelectImage={handleSelectImage} />}
+                {view.type === 'aging' && <AgingView image={view.image} onBack={handleBackToGallery} />}
+            </main>
+        </div>
+      );
+    }
+
+    function ImageGenerator() {
+        const [prompt, setPrompt] = useState('');
+        const [isLoading, setIsLoading] = useState(false);
+        const [error, setError] = useState(null);
+
+        const generateImage = async () => {
+            if (!prompt.trim()) {
+                setError("Please enter a prompt.");
+                return;
+            }
+            setIsLoading(true);
+            setError(null);
+            try {
+                const imageResult = await websim.imageGen({ prompt });
+                
+                const descriptionCompletion = await websim.chat.completions.create({
+                    messages: [
+                        { role: 'system', content: 'You are a highly descriptive AI assistant. Describe the provided image in detail, focusing on objects, atmosphere, and style. The description should be suitable for another AI to recreate the image.' },
+                        { role: 'user', content: [
+                            { type: 'text', text: 'Describe this image.' },
+                            { type: 'image_url', image_url: { url: imageResult.url } }
+                        ]}
+                    ]
+                });
+                const description = descriptionCompletion.content;
+
+                await room.collection('base_image_v1').create({
+                    prompt: prompt,
+                    imageUrl: imageResult.url,
+                    description: description
+                });
+
+                setPrompt('');
+
+            } catch (err) {
+                console.error("Generation failed:", err);
+                setError("Sorry, something went wrong. Please try again.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        return (
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
+                <h2 className="text-2xl font-bold mb-4">Create a New Base Image</h2>
+                <div className="flex flex-col sm:flex-row gap-4">
+                    <input
+                        type="text"
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        placeholder="e.g., A serene lake at sunrise, photorealistic"
+                        className="flex-grow bg-gray-700 text-white p-3 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        disabled={isLoading}
+                    />
+                    <button
+                        onClick={generateImage}
+                        disabled={isLoading}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition duration-300 flex items-center justify-center"
+                    >
+                        {isLoading ? <span className="loader !w-6 !h-6 !border-2"></span> : 'Generate & Add to Gallery'}
+                    </button>
+                </div>
+                {error && <p className="text-red-400 mt-2">{error}</p>}
+            </div>
+        );
+    }
+
+    function Gallery({ onSelectImage }) {
+        const baseImages = useSyncExternalStore(
+            room.collection('base_image_v1').subscribe,
+            room.collection('base_image_v1').getList
+        );
+        const reversedImages = useMemo(() => [...baseImages].reverse(), [baseImages]);
+
+        if (!baseImages) {
+            return <div className="text-center p-8"><span className="loader"></span></div>;
+        }
+
+        return (
+            <div className="animate-fade-in">
+                <h2 className="text-3xl font-bold mb-6 text-center">Base Image Gallery</h2>
+                {reversedImages.length === 0 ? (
+                    <p className="text-center text-gray-400">No base images yet. Generate one above to get started!</p>
+                ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                        {reversedImages.map(image => (
+                            <div key={image.id} className="bg-gray-800 rounded-lg overflow-hidden shadow-lg cursor-pointer transform hover:scale-105 transition-transform duration-300" onClick={() => onSelectImage(image)}>
+                                <img src={image.imageUrl} alt={image.prompt} className="w-full h-48 object-cover" />
+                                <div className="p-4">
+                                    <p className="text-gray-300 text-sm truncate" title={image.prompt}>{image.prompt}</p>
+                                    <p className="text-gray-500 text-xs mt-1">by {image.username}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    const mapSliderValueToTime = (value) => {
+        const val = parseInt(value, 10);
+        if (val <= 15) { // 0-7 days
+            return `${Math.round(val / 15 * 7)} days`;
+        }
+        if (val <= 30) { // 1-3 weeks
+            return `${1 + Math.round((val - 16) / 14 * 2)} weeks`;
+        }
+        if (val <= 45) { // 1-12 months
+            return `${1 + Math.round((val - 31) / 14 * 11)} months`;
+        }
+        if (val <= 60) { // 1-100 years
+            return `${1 + Math.round((val - 46) / 14 * 99)} years`;
+        }
+        if (val <= 80) { // 1-10 centuries
+            return `${1 + Math.round((val - 61) / 19 * 9)} centuries`;
+        }
+        // 81-100: 1-100 millennia
+        return `${1 + Math.round((val - 81) / 19 * 99)} millennia`;
+    };
+
+    function AgingView({ image, onBack }) {
+        const [sliderValue, setSliderValue] = useState(50);
+        const [isLoading, setIsLoading] = useState(false);
+        const [error, setError] = useState(null);
+        const [agedResult, setAgedResult] = useState(null);
+
+        const timeLapse = useMemo(() => mapSliderValueToTime(sliderValue), [sliderValue]);
+        
+        const agedImagesCollection = useMemo(() => room.collection('aged_image_v1').filter({ baseImageId: image.id }), [image.id]);
+        const agedImages = useSyncExternalStore(agedImagesCollection.subscribe, agedImagesCollection.getList);
+        const reversedAgedImages = useMemo(() => [...agedImages].reverse(), [agedImages]);
+
+        const generateAgedImage = async () => {
+            setIsLoading(true);
+            setError(null);
+            setAgedResult(null);
+
+            try {
+                const agedDescriptionCompletion = await websim.chat.completions.create({
+                    messages: [
+                        { role: 'system', content: "You are a speculative historian and world-builder AI. Your task is to take a description of an image and a time duration, and rewrite the description to reflect the passage of that time. Consider decay, erosion, growth, technological advancement, societal change, and natural cycles. Be highly imaginative, detailed, and specific in your new description. The goal is a vivid prompt for an image generation AI." },
+                        { role: 'user', content: `Original description: "${image.description}". Time to advance: ${timeLapse}. Generate the new, aged description.` }
+                    ]
+                });
+                const agedDescription = agedDescriptionCompletion.content;
+
+                const finalImageResult = await websim.imageGen({ prompt: agedDescription });
+
+                const result = {
+                    baseImageId: image.id,
+                    timeLapse: timeLapse,
+                    originalDescription: image.description,
+                    agedDescription: agedDescription,
+                    agedImageUrl: finalImageResult.url,
+                };
+                
+                await room.collection('aged_image_v1').create(result);
+                setAgedResult(result);
+
+            } catch (err) {
+                console.error("Aging process failed:", err);
+                setError("Could not imagine the future. Please try a different time or image.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        return (
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg animate-fade-in">
+                <button onClick={onBack} className="mb-4 text-blue-400 hover:text-blue-300">&larr; Back to Gallery</button>
+                <div className="flex flex-col md:flex-row gap-8">
+                    <div className="md:w-1/2">
+                        <h3 className="text-xl font-bold mb-2">Original Image</h3>
+                        <img src={image.imageUrl} alt={image.prompt} className="w-full rounded-lg shadow-md" />
+                        <p className="text-gray-400 mt-2 text-sm italic">"{image.prompt}"</p>
+                    </div>
+                    <div className="md:w-1/2 flex flex-col">
+                        <h3 className="text-xl font-bold mb-2">Age this Image</h3>
+                        <div className="bg-gray-700 p-4 rounded-lg">
+                            <label htmlFor="time-slider" className="block text-center text-lg font-medium">Time Travel: <span className="text-blue-400 font-bold">{timeLapse}</span></label>
+                            <input
+                                id="time-slider"
+                                type="range"
+                                min="0"
+                                max="100"
+                                value={sliderValue}
+                                onChange={(e) => setSliderValue(e.target.value)}
+                                className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer mt-2 slider-thumb"
+                                disabled={isLoading}
+                            />
+                        </div>
+                        <button
+                            onClick={generateAgedImage}
+                            disabled={isLoading}
+                            className="w-full mt-4 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition duration-300 flex items-center justify-center text-lg"
+                        >
+                            {isLoading ? <span className="loader !w-6 !h-6 !border-2"></span> : 'Generate Future Version'}
+                        </button>
+                        {error && <p className="text-red-400 mt-2 text-center">{error}</p>}
+                        
+                        {agedResult && (
+                            <div className="mt-6 animate-fade-in">
+                               <h3 className="text-xl font-bold mb-2 text-green-400">Result</h3>
+                                <img src={agedResult.agedImageUrl} alt={`Aged version: ${timeLapse}`} className="w-full rounded-lg shadow-md"/>
+                                <p className="text-gray-400 mt-2 text-sm italic">"{agedResult.agedDescription}"</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                 <div className="mt-12">
+                    <h3 className="text-2xl font-bold mb-4 border-t border-gray-700 pt-6">Previous Transformations of this Image</h3>
+                    {reversedAgedImages.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {reversedAgedImages.map(aged => (
+                                <div key={aged.id} className="bg-gray-700 rounded-lg overflow-hidden shadow-lg">
+                                    <img src={aged.agedImageUrl} alt={aged.agedDescription} className="w-full h-40 object-cover" />
+                                    <div className="p-3">
+                                        <p className="font-bold text-blue-400">{aged.timeLapse}</p>
+                                        <p className="text-gray-300 text-xs mt-1 truncate" title={aged.agedDescription}>{aged.agedDescription}</p>
+                                        <p className="text-gray-500 text-xs mt-1">by {aged.username}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-gray-500 text-center">No one has transformed this image yet. Be the first!</p>
+                    )}
+                </div>
+            </div>
+        );
+    }
+    
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
